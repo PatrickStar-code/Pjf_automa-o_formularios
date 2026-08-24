@@ -1,0 +1,11 @@
+# Requirements for Professional Automation Project
+
+# Base packages
+python-dotenv>=1.0.0  # Environment variable management
+schedule>=1.2.0        # Task scheduling
+apscheduler>=3.9.0     # Advanced scheduling
+
+# Optional: Add specific automation tools as needed
+# pyautogui>=0.20.1    # GUI automation
+# selenium>=4.12.0      # Browser automation
+# requests>=2.31.0      # API interactions
