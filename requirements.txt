@@ -2,6 +2,8 @@
 
 # Base packages
 python-dotenv>=1.0.0  # Environment variable management
+pandas>=2.0.0         # Spreadsheet reading
+openpyxl>=3.1.0       # Excel .xlsx engine used by pandas
 schedule>=1.2.0        # Task scheduling
 apscheduler>=3.9.0     # Advanced scheduling
 
