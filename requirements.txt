@@ -6,8 +6,11 @@ pandas>=2.0.0         # Spreadsheet reading
 openpyxl>=3.1.0       # Excel .xlsx engine used by pandas
 schedule>=1.2.0        # Task scheduling
 apscheduler>=3.9.0     # Advanced scheduling
+selenium>=4.12.0      # Browser automation
+rapidfuzz>=2.5.0        # String matching and fuzzy search
+fuzzywuzzy>=0.18.0    # String matching and fuzzy search
 
 # Optional: Add specific automation tools as needed
 # pyautogui>=0.20.1    # GUI automation
-# selenium>=4.12.0      # Browser automation
+
 # requests>=2.31.0      # API interactions
