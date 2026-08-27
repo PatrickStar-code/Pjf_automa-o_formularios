@@ -18,6 +18,7 @@ from difflib import SequenceMatcher
 
 import os
 from fuzzywuzzy import fuzz
+import pandas as pd
 
 
 # ======== CONFIGURAÇÕES ========
@@ -34,6 +35,8 @@ abas_id = []
 URL = "https://juizdefora-mg-tst.vivver.com/login"
 
 WAIT_TIME = 10
+PLANILHA_PROFISSIONAIS = Path(__file__).parent / "Planilha" / "Teste.xlsx"
+COLUNAS_OBRIGATORIAS = {"Nome", "CPF", "CNS", "CBO - Descrição", "N Conselho"}
 
 # ======== FUNÇÕES AUXILIARES ========
 
@@ -42,6 +45,29 @@ def normalizar(texto):
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(c for c in texto if not unicodedata.combining(c))
     return texto
+
+
+def carregar_profissionais(caminho=PLANILHA_PROFISSIONAIS):
+    """Lê a planilha e retorna somente as linhas que possuem nome."""
+    if not caminho.exists():
+        raise FileNotFoundError(f"Planilha não encontrada: {caminho}")
+
+    dados = pd.read_excel(caminho, dtype=str, keep_default_na=False)
+    dados.columns = dados.columns.str.strip()
+
+    colunas_ausentes = COLUNAS_OBRIGATORIAS - set(dados.columns)
+    if colunas_ausentes:
+        raise ValueError(
+            "Colunas obrigatórias ausentes na planilha: "
+            + ", ".join(sorted(colunas_ausentes))
+        )
+
+    dados["Nome"] = dados["Nome"].str.strip()
+    dados = dados[dados["Nome"] != ""]
+
+    profissionais = dados.to_dict(orient="records")
+    print(f"{len(profissionais)} profissional(is) carregado(s) de {caminho.name}.")
+    return profissionais
 
 '''
 def carregar_dados_times(caminho):
@@ -271,7 +297,17 @@ def click_btn_limpar(espera, action,campo):
         print(f"❌ Erro ao clicar em limpar: {e}")
         raise
 
-
+def click_btn_cancelar(espera, action,campo):
+    """Clica no botão de cancelar dentro da tela."""
+    try:
+        btn_cancelar = espera.until(
+            EC.element_to_be_clickable((By.ID, f"{campo}_cancel"))
+        )
+        action.move_to_element(btn_cancelar).click().perform()
+        print("✅ Botão cancelar clicado.")
+    except Exception as e:
+        print(f"❌ Erro ao clicar em cancelar: {e}")
+        raise
 
 def click_btn_editar(espera, action,campo):
     """Clica no botão de editar dentro da tela."""
@@ -298,7 +334,72 @@ def click_btn_pesquisar(espera, action,campo):
         print(f"❌ Erro ao clicar em pesquisar: {e}")
         raise
 
+def click_btn_confirmar(espera, action,campo):
+    """Clica no botão de confirmar dentro da tela."""
+    try:
+        btn_confirmar = espera.until(
+            EC.element_to_be_clickable((By.ID, f"{campo}_save"))
+        )
+        action.move_to_element(btn_confirmar).click().perform()
+        print("✅ Botão confirmar clicado.")
+    except Exception as e:
+        print(f"❌ Erro ao clicar em confirmar: {e}")
+        raise
+
 """Fim botões interaçã"""
+
+
+def preencher_input_por_id(espera, action, id_campo, valor, somente_numeros=False):
+    """Preenche um input pelo atributo name e confirma o valor informado."""
+    valor = "" if valor is None else str(valor).strip()
+    if somente_numeros:
+        valor = "".join(caractere for caractere in valor if caractere.isdigit())
+
+    if not valor:
+        raise ValueError(f"O campo '{id_campo}' não possui um valor válido para preenchimento.")
+
+    campo = espera.until(EC.element_to_be_clickable((By.ID, id_campo)))
+    action.move_to_element(campo).click().perform()
+    campo.clear()
+    campo.send_keys(valor)
+
+    valor_preenchido = campo.get_attribute("value")
+    if valor_preenchido != valor:
+        raise ValueError(
+            f"Falha ao preencher '{id_campo}': recebido '{valor_preenchido}', esperado '{valor}'."
+        )
+
+    print(f"✅ Campo '{id_campo}' preenchido.")
+
+
+def cadastrar_profissional(driver, espera, action, campo_formulario, profissional):
+    """Abre o cadastro de profissional e preenche os dados disponíveis na planilha."""
+    click_btn_cancelar(espera=espera, action=action, campo=campo_formulario)
+    click_btn_inserir(espera=espera, action=action, campo=campo_formulario)
+
+    if not inserir(
+        espera=espera,
+        action=action,
+        driver=driver,
+        campo=f"{campo_formulario}_numpessoa",
+        valor=profissional["Nome"],
+    ):
+        raise ValueError(f"Não foi possível selecionar a pessoa '{profissional['Nome']}'.")
+    preencher_input_por_id(
+        espera=espera,
+        action=action,
+        id_campo="adm_profissional_numdocumentocons",
+        valor=profissional["N Conselho"],
+    )
+    preencher_input_por_id(
+        espera=espera,
+        action=action,
+        id_campo="adm_profissional_numcns",
+        valor=profissional["CNS"],
+        somente_numeros=True,
+    )
+    
+    click_btn_confirmar(espera=espera, action=action, campo=campo_formulario)
 
 def abrir_nova_aba(driver, url=None):
     aba_atual = driver.current_window_handle
@@ -315,13 +416,19 @@ def abrir_nova_aba(driver, url=None):
 
 
 
-def extrair_dados_tabela_profissional(espera):
-    """Tenta extrair os nomes dos médicos da tabela.
-       Se não existir tabela, extrai do card select2."""
-    
-    time.sleep(0.7)
-    valores = set()
+def texto_resultado_tabela(driver):
+    """Obtém o texto atual do corpo da tabela de resultados."""
     try:
+        tabela = driver.find_element(By.ID, "adm_profissional_datatable")
+        return tabela.find_element(By.TAG_NAME, "tbody").text.strip()
+    except NoSuchElementException:
+        return ""
+
+
+def extrair_dados_tabela_profissional(espera, nome, resultado_anterior):
+    """Aguarda a atualização da busca e confere se ela retornou o nome pesquisado."""
+    try:
+        espera.until(lambda driver: texto_resultado_tabela(driver) != resultado_anterior)
         table = espera.until(
             EC.visibility_of_element_located((By.ID, "adm_profissional_datatable"))
         )
@@ -330,54 +437,65 @@ def extrair_dados_tabela_profissional(espera):
         tbody = table.find_element(By.TAG_NAME, "tbody")
         linhas = tbody.find_elements(By.TAG_NAME, "tr")
 
+        nome_normalizado = normalizar(nome)
         for linha in linhas:
-            colunas = linha.find_elements(By.TAG_NAME, "td")
-
-            # Linha vazia
-            if len(colunas) == 1 and "Não foram encontrados resultados" in colunas[0].text:
+            texto_linha = linha.text.strip()
+            if "Não foram encontrados resultados" in texto_linha:
                 print("⚠ Sem cadastros.")
                 return False
-                break
+            if nome_normalizado in normalizar(texto_linha):
+                print("✅ Profissional encontrado na tabela.")
+                return True
 
-            # Linha invalida
-            if len(colunas) <= 9:
-                print("⚠ Linha ignorada (menos de 10 colunas)")
-                continue
-
-            return True
-    except Exception:
-        print("⚠ Nenhuma tabela encontrada. Extraindo do card...")
-        nome_card = espera.until(
-        EC.visibility_of_element_located((By.CSS_SELECTOR, "#s2id_esf_area_profissional_id_profissional .select2-chosen"))
-        ).text
-
-        valores.add(normalizar(nome_card))
-
-        print(f"✅ Apenas um registro encontrado: {nome_card}")
-
-    return True
+        print("⚠ A busca não retornou o profissional pesquisado.")
+        return False
+    except TimeoutException as erro:
+        raise RuntimeError("A tabela de resultado não foi atualizada após a busca.") from erro
 
 
-def verificar_profissional(driver,espera,action,id_aba):
+def verificar_profissional(driver,espera,action,id_aba,profissional):
    driver.switch_to.window(id_aba)
    profissional_existe = False
    campo_formulario = "adm_profissional"
+   nome = profissional["Nome"]
 
-   inserir(espera=espera,action=action,driver=driver,campo=f"{campo_formulario}_numpessoa",valor="ADALBERTO MARIA DA SILVA")
-   click_btn_pesquisar(espera=espera,action=action,campo=campo_formulario)
-   retorno_tabela = extrair_dados_tabela_profissional(espera=espera)
-   print(retorno_tabela)
-   if retorno_tabela == False:
-    print("caminho triste")
-    """Caminho que não existe profissional cadastrado"""
-    element = driver.find_element(By.TAG_NAME, "body")
-    element.send_keys(Keys.ESCAPE)
+   print(f"\n🔎 Verificando: {nome}")
+   click_btn_limpar(espera=espera, action=action, campo=campo_formulario)
+   resultado_anterior = texto_resultado_tabela(driver)
+   resultado_inserir = inserir(espera=espera,action=action,driver=driver,campo=f"{campo_formulario}_numpessoa",valor=nome)
+   
+   if resultado_inserir is False:
+    # Nenhum resultado no select2 = pessoa não existe no sistema, então cadastra diretamente
+    print(f"⚠️ '{nome}' não encontrado na busca. Iniciando cadastro diretamente...")
+    click_btn_limpar(espera=espera, action=action, campo=campo_formulario)
+    cadastrar_profissional(
+        driver=driver,
+        espera=espera,
+        action=action,
+        campo_formulario=campo_formulario,
+        profissional=profissional,
+    )
    else:
-    """Caminho que existe profissional cadastrado"""
-    print("caminho feliz")
-    time.sleep(0.5)
-    click_btn_editar(espera=espera,action=action,campo=campo_formulario)
-    time.sleep(0.5)
+    # Resultado encontrado = pesquisa para confirmar se já está cadastrado
+    click_btn_pesquisar(espera=espera,action=action,campo=campo_formulario)
+    retorno_tabela = extrair_dados_tabela_profissional(
+        espera=espera,
+        nome=nome,
+        resultado_anterior=resultado_anterior,
+    )
+    print(retorno_tabela)
+    if retorno_tabela == False:
+        print("Profissional não encontrado na tabela. Iniciando cadastro...")
+        click_btn_cancelar(espera=espera, action=action, campo=campo_formulario)
+        cadastrar_profissional(
+            driver=driver,
+            espera=espera,
+            action=action,
+            campo_formulario=campo_formulario,
+            profissional=profissional,
+        )
+    else:
+        print("Profissional já cadastrado.")
 
     
 
@@ -387,12 +505,27 @@ def main():
     action = ActionChains(driver)
 
     try:
+        profissionais = carregar_profissionais()
         login(driver, espera,action)
         for aba in abas:
             abrir_nova_aba(driver,aba)
             abas_id.append(driver.window_handles[-1])
-        verificar_profissional(driver=driver,espera=espera,action=action,id_aba=abas_id[0])
-        time.sleep(1)
+
+        for indice, profissional in enumerate(profissionais, start=1):
+            try:
+                print(f"\n--- Registro {indice} de {len(profissionais)} ---")
+                verificar_profissional(
+                    driver=driver,
+                    espera=espera,
+                    action=action,
+                    id_aba=abas_id[0],
+                    profissional=profissional,
+                )
+            except Exception as e:
+                print(f"[ERRO] Não foi possível processar {profissional['Nome']}: {e}")
+                continue
+
+            time.sleep(1)
 
         
     except Exception as e:
@@ -401,7 +534,6 @@ def main():
     finally:
         print("Fechando navegador...")
         driver.quit()
-
 
 
 if __name__ == "__main__":
