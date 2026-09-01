@@ -496,6 +496,8 @@ def verificar_profissional(driver,espera,action,id_aba,profissional):
         )
     else:
         print("Profissional já cadastrado.")
+        time.sleep(1)
+        click_btn_cancelar(espera=espera, action=action, campo=campo_formulario)
 
     
 
